@@ -1,0 +1,72 @@
+# Builds the app and publishes a GitHub Release whenever a version tag is pushed:
+#   git tag v2.0.1
+#   git push origin v2.0.1
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: # manual run from the Actions tab: builds and uploads artifacts, no release
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Work out version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v="0.0.0-dev"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # Small exe: needs the .NET 10 Desktop Runtime installed.
+      - name: Publish (framework-dependent)
+        run: >
+          dotnet publish src/MonitorAudioSwitcher -c Release -o out/fd
+          -p:Version=${{ steps.version.outputs.version }}
+
+      # Big exe: bundles the runtime, runs on any Windows 10/11 x64 PC with nothing installed.
+      - name: Publish (self-contained)
+        run: >
+          dotnet publish src/MonitorAudioSwitcher -c Release -o out/sc
+          -p:Version=${{ steps.version.outputs.version }}
+          -p:SelfContained=true -p:EnableCompressionInSingleFile=true
+
+      - name: Name release files
+        shell: bash
+        run: |
+          mkdir -p release
+          cp out/fd/MonitorAudioSwitcher.exe release/MonitorAudioSwitcher.exe
+          cp out/sc/MonitorAudioSwitcher.exe release/MonitorAudioSwitcher-standalone.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MonitorAudioSwitcher-${{ steps.version.outputs.version }}
+          path: release/*.exe
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe
+          generate_release_notes: true
+          body: |
+            **Which file do I want?**
+            - `MonitorAudioSwitcher-standalone.exe`: just download and run. Bigger, but needs nothing installed.
+            - `MonitorAudioSwitcher.exe`: much smaller, but needs the [.NET 10 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/10.0) installed.
+
+            Put the exe somewhere permanent before turning on "Run when I sign in to Windows".
